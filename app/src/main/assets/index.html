@@ -253,6 +253,22 @@ async function deliver(blob, name, open) {
   downloadBlob(blob, name);
 }
 async function shareBlob(blob, name) { window.AndroidApp.shareFile(name, blob.type || 'application/octet-stream', await blobToB64(blob)); }
+
+/* compartilhar (janela do celular: WhatsApp, e-mail...) */
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+const CAN_SHARE = IS_ANDROID_APP || (IS_MOBILE && typeof navigator.share === 'function' && typeof navigator.canShare === 'function');
+async function shareList(items, title) {   // items: [{blob, name}]
+  if (IS_ANDROID_APP) {
+    const arr = [];
+    for (const it of items) arr.push({ name: it.name, mime: it.blob.type || 'application/octet-stream', b64: await blobToB64(it.blob) });
+    window.AndroidApp.shareFiles(JSON.stringify(arr));
+    return true;
+  }
+  const files = items.map(it => new File([it.blob], it.name, { type: it.blob.type }));
+  if (!navigator.canShare({ files })) return false;
+  try { await navigator.share({ files, title: title || 'Orçamento' }); } catch (e) { if (e && e.name === 'AbortError') return true; throw e; }
+  return true;
+}
 </script>
 <script>/* ===== PDF ===== */
 async function buildPdf(q, company) {
@@ -887,7 +903,8 @@ function viewStep3() {
       <span style="font-size:1.1rem;font-weight:700">VALOR FINAL</span><span class="big">${money(c.total)}</span>
     </div>
     <div class="actions">
-      <button class="btn go" data-act="gen" data-what="both" style="min-height:76px;font-size:1.3rem">⬇ Gerar PDF e Excel</button>
+      ${CAN_SHARE ? '<button class="btn go" data-act="gen" data-what="both" data-share="1" style="min-height:76px;font-size:1.3rem;width:100%">📤 Enviar / Compartilhar</button><button class="btn" data-act="gen" data-what="pdf" data-share="1">📤 Só o PDF</button><button class="btn" data-act="gen" data-what="xlsx" data-share="1">📤 Só o Excel</button>' : ''}
+      <button class="btn ${CAN_SHARE ? '' : 'go'}" data-act="gen" data-what="both" style="${CAN_SHARE ? '' : 'min-height:76px;font-size:1.3rem'}">⬇ ${CAN_SHARE ? 'Salvar PDF e Excel no aparelho' : 'Gerar PDF e Excel'}</button>
       <button class="btn" data-act="gen" data-what="pdf">Só o PDF</button>
       <button class="btn" data-act="gen" data-what="xlsx">Só o Excel</button>
       <button class="btn" data-act="print">🖨 Ver / Imprimir PDF</button>
@@ -985,19 +1002,33 @@ async function refreshPreview() {
     const box = $('#pvbox'); if (box) box.innerHTML = `<iframe class="pv" src="${previewUrl}#toolbar=0&navpanes=0"></iframe>`;
   } catch (e) { const box = $('#pvbox'); if (box) box.innerHTML = '<p>Não foi possível mostrar a visualização, mas você pode gerar o PDF normalmente.</p>'; console.error(e); }
 }
-async function generate(what) {
+async function generate(what, share) {
   for (const s of [0, 1]) if (!validate(s)) { step = s; render(); validate(s); return; }
   const done = $('#done'); done.innerHTML = '<p>Gerando…</p>';
   try {
     const name = baseName(Q);
     lastFiles = { name };
-    if (what === 'both' || what === 'pdf') { lastFiles.pdf = new Blob([await buildPdf(Q, company)], { type: 'application/pdf' }); await deliver(lastFiles.pdf, name + '.pdf', false); }
-    if (what === 'both' || what === 'xlsx') { await new Promise(r => setTimeout(r, 600)); lastFiles.xlsx = new Blob([await buildXlsx(Q, company)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); await deliver(lastFiles.xlsx, name + '.xlsx', false); }
+    if (what === 'both' || what === 'pdf') lastFiles.pdf = new Blob([await buildPdf(Q, company)], { type: 'application/pdf' });
+    if (what === 'both' || what === 'xlsx') lastFiles.xlsx = new Blob([await buildXlsx(Q, company)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    if (!share) {
+      if (lastFiles.pdf) await deliver(lastFiles.pdf, name + '.pdf', false);
+      if (lastFiles.xlsx) { await new Promise(r => setTimeout(r, 600)); await deliver(lastFiles.xlsx, name + '.xlsx', false); }
+    }
     const first = !quotes.some(x => x.id === Q.id && x.status === 'pronto');
     if (first && String(Q.numero).startsWith(company.proximoNumero + '/')) company.proximoNumero = (+company.proximoNumero || 0) + 1;
     saveQuote('pronto');
+    if (share) {
+      const items = [];
+      if (lastFiles.pdf) items.push({ blob: lastFiles.pdf, name: name + '.pdf' });
+      if (lastFiles.xlsx) items.push({ blob: lastFiles.xlsx, name: name + '.xlsx' });
+      const ok = await shareList(items, 'Orçamento ' + (Q.numero || ''));
+      if (!ok) { done.innerHTML = '<div class="err show">Este aparelho não conseguiu abrir o compartilhamento. Use "Salvar" e envie o arquivo pela pasta Downloads.</div>'; return; }
+      done.innerHTML = `<div class="ok">✔ Pronto! Se a janela de envio fechou sem enviar, toque de novo em <b>Enviar / Compartilhar</b>.</div>
+      <div class="actions"><button class="btn primary" data-act="new">➕ Fazer outro orçamento</button><button class="btn" data-act="home">Voltar ao início</button></div>`;
+      return;
+    }
     done.innerHTML = `<div class="ok">✔ Pronto! ${what === 'both' ? 'O PDF e o Excel foram salvos' : 'O arquivo foi salvo'} na pasta <b>Downloads</b> ${IS_ANDROID_APP ? 'do celular' : 'do computador'}, com o nome:<br><b>${esc(name)}</b>${IS_ANDROID_APP ? '' : '<br><br>Se o navegador perguntar, clique em <b>"Permitir"</b> para baixar mais de um arquivo.'}</div>
-      <div class="actions">${IS_ANDROID_APP ? `${lastFiles.pdf ? '<button class="btn go" data-act="share" data-w="pdf">📤 Enviar PDF (WhatsApp, e-mail...)</button>' : ''}${lastFiles.xlsx ? '<button class="btn" data-act="share" data-w="xlsx">📤 Enviar Excel</button>' : ''}` : ''}<button class="btn primary" data-act="new">➕ Fazer outro orçamento</button><button class="btn" data-act="home">Voltar ao início</button></div>`;
+      <div class="actions">${CAN_SHARE ? '<button class="btn go" data-act="share" data-w="all">📤 Enviar / Compartilhar</button>' : ''}<button class="btn primary" data-act="new">➕ Fazer outro orçamento</button><button class="btn" data-act="home">Voltar ao início</button></div>`;
   } catch (e) { console.error(e); done.innerHTML = '<div class="err show">Não foi possível gerar o arquivo. Tente novamente.</div>'; }
 }
 
@@ -1062,8 +1093,8 @@ app.addEventListener('click', e => {
   else if (a === 'chip') { Q[b.dataset.key] = b.dataset.v; const el = $(`input[data-k=${b.dataset.key}]`); el.value = b.dataset.v; scheduleSave(); }
   else if (a === 'obs') { const ta = $('textarea[data-k=obs]'); const v = b.dataset.v; if (!(Q.obs || '').includes(v)) { Q.obs = ((Q.obs || '').trim() ? Q.obs.trim() + '\n' : '') + v; ta.value = Q.obs; scheduleSave(); } else toast('Essa frase já está no texto.'); }
   else if (a === 'obsclear') { const clr = () => { Q.obs = ''; $('textarea[data-k=obs]').value = ''; scheduleSave(); }; if (!(Q.obs || '').trim()) clr(); else ask('Apagar todo o texto das observações?', 'Sim, apagar').then(ok => ok && clr()); }
-  else if (a === 'gen') generate(b.dataset.what);
-  else if (a === 'share') { const bl = lastFiles[b.dataset.w]; if (bl && IS_ANDROID_APP) shareBlob(bl, lastFiles.name + '.' + b.dataset.w); }
+  else if (a === 'gen') generate(b.dataset.what, !!b.dataset.share);
+  else if (a === 'share') { const items = []; if (lastFiles.pdf) items.push({ blob: lastFiles.pdf, name: lastFiles.name + '.pdf' }); if (lastFiles.xlsx) items.push({ blob: lastFiles.xlsx, name: lastFiles.name + '.xlsx' }); if (items.length) shareList(items, 'Orçamento').catch(() => toast('Não foi possível compartilhar.')); }
   else if (a === 'print' && IS_ANDROID_APP) { buildPdf(Q, company).then(by => deliver(new Blob([by], { type: 'application/pdf' }), baseName(Q) + '.pdf', true)); }
   else if (a === 'print') { if (previewUrl) window.open(previewUrl, '_blank'); else buildPdf(Q, company).then(by => window.open(URL.createObjectURL(new Blob([by], { type: 'application/pdf' })), '_blank')); }
   else if (a === 'backup') deliver(new Blob([JSON.stringify({ company, quotes }, null, 1)], { type: 'application/json' }), 'Copia de seguranca orcamentos ' + todayISO() + '.json');

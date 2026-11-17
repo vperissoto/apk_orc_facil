@@ -22,6 +22,10 @@ import androidx.core.content.FileProvider;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class MainActivity extends Activity {
 
@@ -89,6 +93,38 @@ public class MainActivity extends Activity {
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> Toast.makeText(MainActivity.this, "Não foi possível salvar o arquivo.", Toast.LENGTH_LONG).show());
+            }
+        }
+
+
+        @JavascriptInterface
+        public void shareFiles(String json) {
+            try {
+                JSONArray arr = new JSONArray(json);
+                ArrayList<Uri> uris = new ArrayList<>();
+                String mime = null;
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject o = arr.getJSONObject(i);
+                    String m = o.getString("mime");
+                    uris.add(write(o.getString("name"), m, Base64.decode(o.getString("b64"), Base64.DEFAULT)));
+                    mime = (mime == null || mime.equals(m)) ? m : "*/*";
+                }
+                final String type = mime == null ? "*/*" : mime;
+                runOnUiThread(() -> {
+                    Intent send;
+                    if (uris.size() == 1) {
+                        send = new Intent(Intent.ACTION_SEND);
+                        send.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+                    } else {
+                        send = new Intent(Intent.ACTION_SEND_MULTIPLE);
+                        send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+                    }
+                    send.setType(type);
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(send, "Enviar orçamento"));
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Não foi possível compartilhar os arquivos.", Toast.LENGTH_LONG).show());
             }
         }
 
